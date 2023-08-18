@@ -4,8 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
+	"m3u8_downloader/utils"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -43,7 +42,7 @@ func main() {
 	} else {
 		url_regexp, _ := regexp.Compile("http.*")
 		if url_regexp.MatchString(filePath) {
-			_ = downloadFile(DEFAULT_INPUT_FILE_PATH, filePath)
+			_ = utils.DownloadFileFromUrl(DEFAULT_INPUT_FILE_PATH, filePath)
 			filePath = DEFAULT_INPUT_FILE_PATH
 		}
 	}
@@ -158,7 +157,7 @@ type taskFunc func()
 func taskFuncWrapper(filepath string, url string, wg *sync.WaitGroup, bar *progressbar.ProgressBar) taskFunc {
 	return func() {
 		if _, err := os.Stat(filepath); errors.Is(err, os.ErrNotExist) {
-			err := downloadFile(filepath, url)
+			err := utils.DownloadFileFromUrl(filepath, url)
 			if err != nil {
 				fmt.Println(err)
 			}
@@ -233,27 +232,4 @@ func parseM3u8(filePath string, name string) M3u8Info {
 		}
 	}
 	return info
-}
-
-func downloadFile(filepath string, url string) (err error) {
-	// Create the file
-	out, err := os.Create(filepath)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	client := &http.Client{}
-	req, _ := http.NewRequest("GET", url, nil)
-	req.Header.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36")
-	resp, _ := client.Do(req)
-	defer resp.Body.Close()
-
-	// Writer the body to file
-	_, err = io.Copy(out, resp.Body)
-	if err != nil {
-		return err
-	}
-
-	return nil
 }

@@ -1,9 +1,8 @@
-module main
+module m3u8_downloader
 
 go 1.18
 
 require (
-	github.com/Jeffail/tunny v0.1.4 // indirect
 	github.com/jessevdk/go-flags v1.5.0 // indirect
 	github.com/mattn/go-runewidth v0.0.15 // indirect
 	github.com/mitchellh/colorstring v0.0.0-20190213212951-d06e56a500db // indirect
