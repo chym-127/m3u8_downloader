@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"log"
 	"m3u8_downloader/utils"
+	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -35,17 +37,19 @@ var (
 type Option struct {
 	M3u8FilePath       string `short:"i" long:"input" description:"m3u8文件路径"`
 	OutPutFileName     string `short:"o" long:"output" description:"输出文件名" default:"output"`
-	RetryDownloadCount int    `short:"r" long:"retry" description:"文件下载重试次数"`
-	MaximumCoucurrency int    `short:"d" long:"download" description:"下载最大并发数"`
+	RetryDownloadCount int    `short:"r" long:"retry" description:"文件下载重试次数" default:"3"`
+	MaximumCoucurrency int    `short:"d" long:"download" description:"下载最大并发数" default:"15"`
 }
 
 func main() {
 	var opt Option
+	var baseUrl = ""
 	flags.Parse(&opt)
 	filePath := opt.M3u8FilePath
 	outputFileName := opt.OutPutFileName
 	RETRY_DOWNLOAD_COUNT = opt.RetryDownloadCount
 	MAXIMUM_CONCURRENCY = opt.MaximumCoucurrency
+
 	initEnv(outputFileName)
 	logFile := utils.InitLogger(LOG_PATH)
 	defer logFile.Close()
@@ -57,6 +61,7 @@ func main() {
 		url_regexp, _ := regexp.Compile("http.*")
 		if url_regexp.MatchString(filePath) {
 			log.Println("Start downloading m3u8 file:", filePath)
+			baseUrl = getBaseUrl(filePath)
 			err := utils.DownloadFileFromUrl(DEFAULT_INPUT_FILE_PATH, filePath)
 			if err != nil {
 				log.Fatalln("m3u8 file download failure")
@@ -66,7 +71,8 @@ func main() {
 		}
 	}
 
-	info := parseM3u8(filePath, outputFileName)
+	info := parseM3u8(filePath, outputFileName, baseUrl)
+
 	bar := progressbar.NewOptions(int(info.total_segment),
 		progressbar.OptionEnableColorCodes(true),
 		// progressbar.OptionShowBytes(true),
@@ -90,6 +96,19 @@ func main() {
 
 	execStep2(info)
 
+}
+
+func getBaseUrl(uri string) string {
+	u, _ := url.Parse(uri)
+	baseUrl := u.Scheme + "://" + u.Host
+	fileNameReg, _ := regexp.Compile(".?.m3u8")
+	name := path.Base(uri)
+	if fileNameReg.MatchString(name) {
+		baseUrl += path.Dir(u.Path)
+	} else {
+		baseUrl += u.Path
+	}
+	return baseUrl
 }
 
 func execStep2(info M3u8Info) {
@@ -171,8 +190,11 @@ func taskFuncWrapper(filepath string, url string, wg *sync.WaitGroup, bar *progr
 		for i := 0; i < RETRY_DOWNLOAD_COUNT; i++ {
 			if _, err := os.Stat(filepath); errors.Is(err, os.ErrNotExist) {
 				err := utils.DownloadFileFromUrl(filepath, url)
-				if err != nil && i == RETRY_DOWNLOAD_COUNT-1 {
-					log.Fatalln(url + "下载失败")
+				if err != nil {
+					log.Println(err)
+					if i == RETRY_DOWNLOAD_COUNT-1 {
+						log.Println(url + "下载失败")
+					}
 				} else {
 					break
 				}
@@ -184,7 +206,8 @@ func taskFuncWrapper(filepath string, url string, wg *sync.WaitGroup, bar *progr
 }
 
 type M3u8Info struct {
-	name           string    //名称
+	name           string //名称
+	base_url       string
 	total_segment  int32     //子元素的个数
 	total_duration float64   //总时长
 	segments       []Segment //子元素
@@ -197,9 +220,10 @@ type Segment struct {
 	url          string //地址
 }
 
-func parseM3u8(filePath string, name string) M3u8Info {
+func parseM3u8(filePath string, name string, baseUrl string) M3u8Info {
 	info := M3u8Info{
 		name:           name,
+		base_url:       baseUrl,
 		total_segment:  0,
 		total_duration: 0.0,
 		segments:       []Segment{},
@@ -239,6 +263,8 @@ func parseM3u8(filePath string, name string) M3u8Info {
 				line = fileScanner.Text()
 				if url_regexp.MatchString(line) {
 					s.url = line
+				} else {
+					s.url = info.base_url + "/" + line
 				}
 			}
 			info.total_segment += 1
