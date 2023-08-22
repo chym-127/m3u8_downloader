@@ -1,10 +1,30 @@
 package utils
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"os"
 )
+
+func GetMimetypeFromFilePath(filepath string) (fileType string, err error) {
+	file, err := os.Open(filepath)
+	if err != nil {
+		return fileType, err
+	}
+	defer file.Close()
+
+	// 读取前 512 个字节的内容
+	buffer := make([]byte, 512)
+	_, err = file.Read(buffer)
+	if err != nil {
+		return fileType, err
+	}
+
+	// 判断文件类型
+	fileType = http.DetectContentType(buffer)
+	return fileType, nil
+}
 
 func DownloadFileFromUrl(filepath string, url string) (err error) {
 	// Create the file
@@ -41,6 +61,8 @@ func RemoveFileIfExist(filePath string) bool {
 		err = os.Remove(filePath) //remove the file using built-in functions
 		if err == nil {
 			return true
+		} else {
+			fmt.Println(err)
 		}
 	}
 	return false

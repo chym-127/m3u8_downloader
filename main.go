@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/jessevdk/go-flags"
@@ -32,6 +33,7 @@ var (
 var (
 	RETRY_DOWNLOAD_COUNT = 3  //文件下载重试次数
 	MAXIMUM_CONCURRENCY  = 15 // 最大并发数
+	IGNORED_DOWNFAIL     = false
 )
 
 type Option struct {
@@ -39,16 +41,19 @@ type Option struct {
 	OutPutFileName     string `short:"o" long:"output" description:"输出文件名" default:"output"`
 	RetryDownloadCount int    `short:"r" long:"retry" description:"文件下载重试次数" default:"3"`
 	MaximumCoucurrency int    `short:"d" long:"download" description:"下载最大并发数" default:"15"`
+	IgnoredDownFail    bool   `short:"g" long:"ignore" description:"忽略下载失败的文件"`
 }
 
 func main() {
 	var opt Option
 	var baseUrl = ""
 	flags.Parse(&opt)
+
 	filePath := opt.M3u8FilePath
 	outputFileName := opt.OutPutFileName
 	RETRY_DOWNLOAD_COUNT = opt.RetryDownloadCount
 	MAXIMUM_CONCURRENCY = opt.MaximumCoucurrency
+	IGNORED_DOWNFAIL = opt.IgnoredDownFail
 
 	initEnv(outputFileName)
 	logFile := utils.InitLogger(LOG_PATH)
@@ -60,18 +65,24 @@ func main() {
 	} else {
 		url_regexp, _ := regexp.Compile("http.*")
 		if url_regexp.MatchString(filePath) {
-			log.Println("Start downloading m3u8 file:", filePath)
+			utils.Println("Start downloading m3u8 file:", filePath)
 			baseUrl = getBaseUrl(filePath)
 			err := utils.DownloadFileFromUrl(DEFAULT_INPUT_FILE_PATH, filePath)
 			if err != nil {
-				log.Fatalln("m3u8 file download failure")
+				utils.Println("m3u8 file download failure")
 				return
 			}
+			utils.Println("m3u8 file download successfully")
 			filePath = DEFAULT_INPUT_FILE_PATH
 		}
 	}
 
+	utils.Println("Start parsing m3u8 files")
 	info := parseM3u8(filePath, outputFileName, baseUrl)
+	utils.Println("Name: " + info.name)
+	utils.Println("BaseUrl: " + info.base_url)
+	utils.Println("Duration: " + fmt.Sprintf("%.2f", info.total_duration) + "s")
+	utils.Println("SegmentLength: " + strconv.Itoa(int(info.total_segment)))
 
 	bar := progressbar.NewOptions(int(info.total_segment),
 		progressbar.OptionEnableColorCodes(true),
@@ -87,9 +98,10 @@ func main() {
 			BarEnd:        "]",
 		}))
 
-	execStep1(info, bar)
+	execStep1(&info, bar)
+
 	fmt.Println()
-	log.Println("ts file downloaded successfully")
+	utils.Println("Ts file downloaded successfully")
 
 	bar.Exit()
 	defer bar.Close()
@@ -99,7 +111,10 @@ func main() {
 }
 
 func getBaseUrl(uri string) string {
-	u, _ := url.Parse(uri)
+	u, err := url.Parse(uri)
+	if err != nil {
+		utils.Println(err)
+	}
 	baseUrl := u.Scheme + "://" + u.Host
 	fileNameReg, _ := regexp.Compile(".?.m3u8")
 	name := path.Base(uri)
@@ -111,11 +126,7 @@ func getBaseUrl(uri string) string {
 	return baseUrl
 }
 
-func execStep2(info M3u8Info) {
-	outputMp4(info)
-}
-
-func execStep1(info M3u8Info, bar *progressbar.ProgressBar) {
+func execStep1(info *M3u8Info, bar *progressbar.ProgressBar) {
 	var wg sync.WaitGroup
 	p, _ := ants.NewPool(MAXIMUM_CONCURRENCY)
 	defer p.Release()
@@ -123,18 +134,18 @@ func execStep1(info M3u8Info, bar *progressbar.ProgressBar) {
 	for _, item := range info.segments {
 		wg.Add(1)
 		filePath := filepath.Join(SEGMENTS_PATH, strconv.Itoa(int(item.index-1))+".ts")
-		p.Submit(taskFuncWrapper(filePath, item.url, &wg, bar))
+		p.Submit(taskFuncWrapper(info, int(item.index-1), filePath, &wg, bar))
 	}
 
 	wg.Wait()
 }
 
 func initEnv(outputFileName string) {
-	ex, err := os.Executable()
+	exPath, err := os.Getwd()
 	if err != nil {
 		panic(err)
 	}
-	exPath := filepath.Dir(ex)
+	// exPath := filepath.Dir(ex)
 	DOWNLOAD_PATH = filepath.Join(exPath, "downloads")
 	SEGMENTS_PATH = filepath.Join(DOWNLOAD_PATH, "segments")
 	LOG_PATH = filepath.Join(DOWNLOAD_PATH, "log.txt")
@@ -146,58 +157,69 @@ func initEnv(outputFileName string) {
 	OUTPUT_FILE_PATH = filepath.Join(DOWNLOAD_PATH, outputFileName+".mp4")
 }
 
-func outputMp4(info M3u8Info) {
-	log.Println("Generating video files in progress")
+func execStep2(info M3u8Info) {
+	utils.Println("Generating video files in progress")
 
 	utils.RemoveFileIfExist(OUTPUT_FILE_PATH)
-	fileName := createTsFile(info)
+	fileName, failCount := createTsFile(info)
+	if !IGNORED_DOWNFAIL && failCount > 0 {
+		utils.Error("Partial file download failure, export failure")
+		return
+	}
 
 	args := []string{"-f", "concat", "-i", fileName, "-c", "copy", "-bsf:a", "aac_adtstoasc", OUTPUT_FILE_PATH}
-
+	log.Println("ffmpeg command :ffmpeg " + strings.Join(args, " "))
 	cmd := exec.Command("ffmpeg", args...)
 	_, err := cmd.CombinedOutput()
 	if err != nil {
-		fmt.Println(err)
+		utils.Println(err)
 	}
 
-	log.Println("Successfully！Have fun.")
-
+	utils.Println("Successfully！Have fun.")
 }
 
-func createTsFile(info M3u8Info) string {
+func createTsFile(info M3u8Info) (string, int) {
 	fileName := filepath.Join(SEGMENTS_PATH, TS_FILE_NAME)
 	utils.RemoveFileIfExist(fileName)
 	file, _ := os.OpenFile(fileName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 
 	datawriter := bufio.NewWriter(file)
 
+	failCount := 0
 	for i, item := range info.segments {
-		str := "file " + strconv.Itoa(i) + ".ts\n"
-		str += "duration " + item.duration_str
-
-		_, _ = datawriter.WriteString(str + "\n")
+		if item.is_download {
+			str := "file " + strconv.Itoa(i) + ".ts\n"
+			str += "duration " + item.duration_str
+			_, _ = datawriter.WriteString(str + "\n")
+		} else {
+			failCount += 1
+		}
 	}
 
 	datawriter.Flush()
 	file.Close()
-	return fileName
+	return fileName, failCount
 }
 
 type taskFunc func()
 
-func taskFuncWrapper(filepath string, url string, wg *sync.WaitGroup, bar *progressbar.ProgressBar) taskFunc {
+func taskFuncWrapper(info *M3u8Info, index int, filepath string, wg *sync.WaitGroup, bar *progressbar.ProgressBar) taskFunc {
 	return func() {
-		for i := 0; i < RETRY_DOWNLOAD_COUNT; i++ {
+		url := info.segments[index].url
+		for i := 1; i <= RETRY_DOWNLOAD_COUNT; i++ {
 			if _, err := os.Stat(filepath); errors.Is(err, os.ErrNotExist) {
-				err := utils.DownloadFileFromUrl(filepath, url)
-				if err != nil {
-					log.Println(err)
-					if i == RETRY_DOWNLOAD_COUNT-1 {
-						log.Println(url + "下载失败")
-					}
-				} else {
-					break
+				utils.DownloadFileFromUrl(filepath, url)
+			}
+			fileType, err := utils.GetMimetypeFromFilePath(filepath)
+
+			if err == nil && fileType == "application/octet-stream" {
+				break
+			} else {
+				if i == RETRY_DOWNLOAD_COUNT {
+					info.segments[index].is_download = false
+					log.Println(strconv.Itoa(int(index)) + ".ts: " + url + " 下载失败")
 				}
+				utils.RemoveFileIfExist(filepath)
 			}
 		}
 		bar.Add(1)
@@ -218,6 +240,7 @@ type Segment struct {
 	duration     float64 //时长
 	duration_str string
 	url          string //地址
+	is_download  bool
 }
 
 func parseM3u8(filePath string, name string, baseUrl string) M3u8Info {
@@ -236,7 +259,7 @@ func parseM3u8(filePath string, name string, baseUrl string) M3u8Info {
 	readFile, err := os.Open(filePath)
 
 	if err != nil {
-		fmt.Println(err)
+		utils.Println(err)
 	}
 	fileScanner := bufio.NewScanner(readFile)
 	fileScanner.Split(bufio.ScanLines)
@@ -252,12 +275,13 @@ func parseM3u8(filePath string, name string, baseUrl string) M3u8Info {
 			var d float64 = 0.0
 			if len(str) > 0 {
 				v, _ := strconv.ParseFloat(str, 64)
-				d, _ = strconv.ParseFloat(fmt.Sprintf("%.2f", v), 64)
+				d, _ = strconv.ParseFloat(fmt.Sprintf("%.10f", v), 64)
 			}
 			s := Segment{
 				index:        count_index,
 				duration:     d,
 				duration_str: str,
+				is_download:  true,
 			}
 			if fileScanner.Scan() {
 				line = fileScanner.Text()

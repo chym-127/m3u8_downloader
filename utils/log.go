@@ -2,7 +2,6 @@ package utils
 
 import (
 	"fmt"
-	"io"
 	"log"
 	"os"
 )
@@ -15,6 +14,17 @@ func InitLogger(logFilePath string) *os.File {
 		log.Fatalf("error opening file: %v", err)
 	}
 
-	log.SetOutput(io.MultiWriter(os.Stderr, f))
+	log.SetOutput(f)
 	return f
+}
+
+func Println(msg ...any) {
+	fmt.Println(msg...)
+	log.Println(msg...)
+}
+
+func Error(msg ...any) {
+	fmt.Println(msg...)
+	log.Println(msg...)
+	log.Fatalln("Mission failed.")
 }
