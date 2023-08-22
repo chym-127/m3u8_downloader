@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/jessevdk/go-flags"
 	"github.com/panjf2000/ants/v2"
@@ -34,6 +35,7 @@ var (
 	RETRY_DOWNLOAD_COUNT = 3  //文件下载重试次数
 	MAXIMUM_CONCURRENCY  = 15 // 最大并发数
 	IGNORED_DOWNFAIL     = false
+	WAITBEFOREDOWN       = 0
 )
 
 type Option struct {
@@ -42,6 +44,7 @@ type Option struct {
 	RetryDownloadCount int    `short:"r" long:"retry" description:"文件下载重试次数" default:"3"`
 	MaximumCoucurrency int    `short:"d" long:"download" description:"下载最大并发数" default:"15"`
 	IgnoredDownFail    bool   `short:"g" long:"ignore" description:"忽略下载失败的文件"`
+	WaitBeforeDown     int    `short:"w" long:"wait" description:"每次下载前线程睡眠多少毫秒" default:"0"`
 }
 
 func main() {
@@ -54,6 +57,7 @@ func main() {
 	RETRY_DOWNLOAD_COUNT = opt.RetryDownloadCount
 	MAXIMUM_CONCURRENCY = opt.MaximumCoucurrency
 	IGNORED_DOWNFAIL = opt.IgnoredDownFail
+	WAITBEFOREDOWN = opt.WaitBeforeDown
 
 	initEnv(outputFileName)
 	logFile := utils.InitLogger(LOG_PATH)
@@ -208,6 +212,9 @@ func taskFuncWrapper(info *M3u8Info, index int, filepath string, wg *sync.WaitGr
 		url := info.segments[index].url
 		for i := 1; i <= RETRY_DOWNLOAD_COUNT; i++ {
 			if _, err := os.Stat(filepath); errors.Is(err, os.ErrNotExist) {
+				if WAITBEFOREDOWN > 0 {
+					time.Sleep(time.Millisecond * time.Duration(WAITBEFOREDOWN))
+				}
 				utils.DownloadFileFromUrl(filepath, url)
 			}
 			fileType, err := utils.GetMimetypeFromFilePath(filepath)
