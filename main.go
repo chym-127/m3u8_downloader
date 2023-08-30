@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"m3u8_downloader/utils"
+	"math/rand"
 	"net/url"
 	"os"
 	"os/exec"
@@ -76,7 +77,7 @@ func main() {
 			baseUrl = getBaseUrl(filePath)
 			err := utils.DownloadFileFromUrl(DEFAULT_INPUT_FILE_PATH, filePath)
 			if err != nil {
-				utils.Println("EVENT:PROGRESS=m3u8文件下载失败")
+				utils.Println("EVENT:ERROR=m3u8文件下载失败")
 				panic("")
 			}
 			utils.Println("m3u8 file download successfully")
@@ -90,21 +91,14 @@ func main() {
 	utils.Println("BaseUrl: " + info.base_url)
 	utils.Println("Duration: " + fmt.Sprintf("%.2f", info.total_duration) + "s")
 	utils.Println("SegmentLength: " + strconv.Itoa(int(info.total_segment)))
-	utils.Println("EVENT:START=" + info.name + "-" + fmt.Sprintf("%.2f", info.total_duration) + "-" + strconv.Itoa(int(info.total_segment)))
+	utils.Println("EVENT:START=" + fmt.Sprintf("%.2f", info.total_duration) + "-" + strconv.Itoa(int(info.total_segment)))
 
 	bar := progressbar.NewOptions(int(info.total_segment),
 		progressbar.OptionEnableColorCodes(true),
 		// progressbar.OptionShowBytes(true),
-		progressbar.OptionSetWidth(15),
+		progressbar.OptionSetWidth(0),
 		progressbar.OptionSetDescription("[reset]EVENT:PROGRESS=Download file..."),
-		progressbar.OptionShowCount(),
-		progressbar.OptionSetTheme(progressbar.Theme{
-			Saucer:        "[green]=[reset]",
-			SaucerHead:    "[green]>[reset]",
-			SaucerPadding: " ",
-			BarStart:      "[",
-			BarEnd:        "]",
-		}))
+		progressbar.OptionShowCount())
 
 	execStep1(&info, bar)
 
@@ -157,13 +151,24 @@ func execStep1(info *M3u8Info, bar *progressbar.ProgressBar) {
 	wg.Wait()
 }
 
+func RandStr(length int) string {
+	str := "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	bytes := []byte(str)
+	result := []byte{}
+	rand.Seed(time.Now().UnixNano() + int64(rand.Intn(100)))
+	for i := 0; i < length; i++ {
+		result = append(result, bytes[rand.Intn(len(bytes))])
+	}
+	return string(result)
+}
+
 func initEnv(outputFileName string) {
 	exPath, err := os.Getwd()
 	if err != nil {
 		panic(err)
 	}
 	// exPath := filepath.Dir(ex)
-	DOWNLOAD_PATH = filepath.Join(exPath, "downloads")
+	DOWNLOAD_PATH = filepath.Join(exPath, RandStr(12))
 	SEGMENTS_PATH = filepath.Join(DOWNLOAD_PATH, "segments")
 	LOG_PATH = filepath.Join(DOWNLOAD_PATH, "log.txt")
 
@@ -180,7 +185,7 @@ func execStep2(info M3u8Info) {
 	fileName, failCount := createTsFile(info)
 	if !IGNORED_DOWNFAIL && failCount > 0 {
 		TS_DOWNLOAD_FAIL = true
-		utils.Println("EVENT:PROGRESS=部分ts文件下载失败")
+		utils.Println("EVENT:ERROR=部分ts文件下载失败")
 		panic("")
 	}
 
@@ -190,7 +195,7 @@ func execStep2(info M3u8Info) {
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		utils.Println(string(output[:]))
-		utils.Println("EVENT:PROGRESS=ffmpeg命令执行失败")
+		utils.Println("EVENT:ERROR=ffmpeg命令执行失败")
 		panic("")
 	}
 
