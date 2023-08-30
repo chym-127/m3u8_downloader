@@ -29,6 +29,7 @@ var (
 	TS_FILE_NAME                   = "all.txt"
 	OUTPUT_FILE_PATH               = ""
 	DEFAULT_INPUT_FILE_PATH string = ""
+	TS_DOWNLOAD_FAIL               = false
 )
 
 var (
@@ -40,20 +41,23 @@ var (
 
 type Option struct {
 	M3u8FilePath       string `short:"i" long:"input" description:"m3u8文件路径"`
-	OutPutFileName     string `short:"o" long:"output" description:"输出文件名" default:"output"`
+	OutPutFilePath     string `short:"o" long:"output" description:"输出文件" default:"./output.mp4"`
 	RetryDownloadCount int    `short:"r" long:"retry" description:"文件下载重试次数" default:"3"`
 	MaximumCoucurrency int    `short:"d" long:"download" description:"下载最大并发数" default:"15"`
 	IgnoredDownFail    bool   `short:"g" long:"ignore" description:"忽略下载失败的文件"`
+	CleanWorkDir       bool   `short:"c" long:"clean" description:"下载成功后删除工作目录"`
 	WaitBeforeDown     int    `short:"w" long:"wait" description:"每次下载前线程睡眠多少毫秒" default:"0"`
 }
 
 func main() {
+
 	var opt Option
 	var baseUrl = ""
 	flags.Parse(&opt)
 
 	filePath := opt.M3u8FilePath
-	outputFileName := opt.OutPutFileName
+	outputFileName := path.Base(opt.OutPutFilePath)
+	OUTPUT_FILE_PATH = opt.OutPutFilePath
 	RETRY_DOWNLOAD_COUNT = opt.RetryDownloadCount
 	MAXIMUM_CONCURRENCY = opt.MaximumCoucurrency
 	IGNORED_DOWNFAIL = opt.IgnoredDownFail
@@ -61,7 +65,6 @@ func main() {
 
 	initEnv(outputFileName)
 	logFile := utils.InitLogger(LOG_PATH)
-	defer logFile.Close()
 
 	// 先下载m3u8文件
 	if filePath == "" {
@@ -73,8 +76,8 @@ func main() {
 			baseUrl = getBaseUrl(filePath)
 			err := utils.DownloadFileFromUrl(DEFAULT_INPUT_FILE_PATH, filePath)
 			if err != nil {
-				utils.Println("m3u8 file download failure")
-				return
+				utils.Println("EVENT:PROGRESS=m3u8文件下载失败")
+				panic("")
 			}
 			utils.Println("m3u8 file download successfully")
 			filePath = DEFAULT_INPUT_FILE_PATH
@@ -87,12 +90,13 @@ func main() {
 	utils.Println("BaseUrl: " + info.base_url)
 	utils.Println("Duration: " + fmt.Sprintf("%.2f", info.total_duration) + "s")
 	utils.Println("SegmentLength: " + strconv.Itoa(int(info.total_segment)))
+	utils.Println("EVENT:START=" + info.name + "-" + fmt.Sprintf("%.2f", info.total_duration) + "-" + strconv.Itoa(int(info.total_segment)))
 
 	bar := progressbar.NewOptions(int(info.total_segment),
 		progressbar.OptionEnableColorCodes(true),
 		// progressbar.OptionShowBytes(true),
 		progressbar.OptionSetWidth(15),
-		progressbar.OptionSetDescription("[reset]Download file..."),
+		progressbar.OptionSetDescription("[reset]EVENT:PROGRESS=Download file..."),
 		progressbar.OptionShowCount(),
 		progressbar.OptionSetTheme(progressbar.Theme{
 			Saucer:        "[green]=[reset]",
@@ -112,6 +116,15 @@ func main() {
 
 	execStep2(info)
 
+	if opt.CleanWorkDir && !TS_DOWNLOAD_FAIL {
+		defer cleanDir()
+	}
+
+	defer logFile.Close()
+}
+
+func cleanDir() {
+	os.RemoveAll(DOWNLOAD_PATH)
 }
 
 func getBaseUrl(uri string) string {
@@ -158,7 +171,6 @@ func initEnv(outputFileName string) {
 	_ = os.Mkdir(SEGMENTS_PATH, os.ModeDir)
 
 	DEFAULT_INPUT_FILE_PATH = filepath.Join(DOWNLOAD_PATH, "video.m3u8")
-	OUTPUT_FILE_PATH = filepath.Join(DOWNLOAD_PATH, outputFileName+".mp4")
 }
 
 func execStep2(info M3u8Info) {
@@ -167,16 +179,19 @@ func execStep2(info M3u8Info) {
 	utils.RemoveFileIfExist(OUTPUT_FILE_PATH)
 	fileName, failCount := createTsFile(info)
 	if !IGNORED_DOWNFAIL && failCount > 0 {
-		utils.Error("Partial file download failure, export failure")
-		return
+		TS_DOWNLOAD_FAIL = true
+		utils.Println("EVENT:PROGRESS=部分ts文件下载失败")
+		panic("")
 	}
 
 	args := []string{"-f", "concat", "-i", fileName, "-c", "copy", "-bsf:a", "aac_adtstoasc", OUTPUT_FILE_PATH}
 	log.Println("ffmpeg command :ffmpeg " + strings.Join(args, " "))
 	cmd := exec.Command("ffmpeg", args...)
-	_, err := cmd.CombinedOutput()
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		utils.Println(err)
+		utils.Println(string(output[:]))
+		utils.Println("EVENT:PROGRESS=ffmpeg命令执行失败")
+		panic("")
 	}
 
 	utils.Println("Successfully！Have fun.")
