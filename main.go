@@ -31,6 +31,7 @@ var (
 	OUTPUT_FILE_PATH               = ""
 	DEFAULT_INPUT_FILE_PATH string = ""
 	TS_DOWNLOAD_FAIL               = false
+	OnlyDownM3u8                   = false
 )
 
 var (
@@ -46,6 +47,7 @@ type Option struct {
 	RetryDownloadCount int    `short:"r" long:"retry" description:"文件下载重试次数" default:"3"`
 	MaximumCoucurrency int    `short:"d" long:"download" description:"下载最大并发数" default:"15"`
 	IgnoredDownFail    bool   `short:"g" long:"ignore" description:"忽略下载失败的文件"`
+	OnlyDownM3u8       bool   `short:"m" long:"m3u8" description:"忽略下载失败的文件"`
 	CleanWorkDir       bool   `short:"c" long:"clean" description:"下载成功后删除工作目录"`
 	WaitBeforeDown     int    `short:"w" long:"wait" description:"每次下载前线程睡眠多少毫秒" default:"0"`
 }
@@ -63,6 +65,10 @@ func main() {
 	MAXIMUM_CONCURRENCY = opt.MaximumCoucurrency
 	IGNORED_DOWNFAIL = opt.IgnoredDownFail
 	WAITBEFOREDOWN = opt.WaitBeforeDown
+	OnlyDownM3u8 = opt.OnlyDownM3u8
+	if opt.CleanWorkDir && !TS_DOWNLOAD_FAIL {
+		defer cleanDir()
+	}
 
 	initEnv(outputFileName)
 	logFile := utils.InitLogger(LOG_PATH)
@@ -100,21 +106,56 @@ func main() {
 		progressbar.OptionSetDescription("[reset]EVENT:PROGRESS=Download file..."),
 		progressbar.OptionShowCount())
 
-	execStep1(&info, bar)
-
-	fmt.Println()
-	utils.Println("Ts file downloaded successfully")
-
-	bar.Exit()
-	defer bar.Close()
-
-	execStep2(info)
-
-	if opt.CleanWorkDir && !TS_DOWNLOAD_FAIL {
-		defer cleanDir()
+	if !OnlyDownM3u8 {
+		execStep1(&info, bar)
+		fmt.Println()
+		utils.Println("Ts file downloaded successfully")
+		bar.Exit()
+		execStep2(info)
+	} else {
+		outputNewM3u8(DEFAULT_INPUT_FILE_PATH, baseUrl, OUTPUT_FILE_PATH, bar)
+		time.Sleep(time.Millisecond * time.Duration(1))
 	}
 
+	defer bar.Close()
+
 	defer logFile.Close()
+}
+
+func outputNewM3u8(inputPath string, baseUrl string, outputPath string, bar *progressbar.ProgressBar) {
+	url_regexp, _ := regexp.Compile("http.*.ts")
+	ts_regexp, _ := regexp.Compile(".*.ts$")
+	readFile, err := os.Open(inputPath)
+	if err != nil {
+		log.Fatalf("failed creating file: %s", err)
+	}
+	outFile, err := os.OpenFile(outputPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Fatalf("failed creating file: %s", err)
+	}
+	datawriter := bufio.NewWriter(outFile)
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	fileScanner := bufio.NewScanner(readFile)
+
+	fileScanner.Split(bufio.ScanLines)
+
+	for fileScanner.Scan() {
+		line := fileScanner.Text()
+		newLine := line
+		if ts_regexp.MatchString(line) {
+			bar.Add(1)
+			if !url_regexp.MatchString(line) {
+				newLine = baseUrl + "/" + line
+			}
+		}
+		_, _ = datawriter.WriteString(newLine + "\n")
+	}
+	datawriter.Flush()
+	outFile.Close()
+	readFile.Close()
 }
 
 func cleanDir() {
