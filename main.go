@@ -54,7 +54,10 @@ func main() {
 
 	var opt Option
 	var baseUrl = ""
-	flags.Parse(&opt)
+	_, err := flags.Parse(&opt)
+	if err != nil {
+		utils.Println(err)
+	}
 
 	filePath := opt.M3u8FilePath
 	if filePath == "" {
@@ -66,9 +69,6 @@ func main() {
 	MAXIMUM_CONCURRENCY = opt.MaximumCoucurrency
 	IGNORED_DOWNFAIL = opt.IgnoredDownFail
 	WAITBEFOREDOWN = opt.WaitBeforeDown
-	if opt.CleanWorkDir && !TS_DOWNLOAD_FAIL {
-		defer cleanDir()
-	}
 
 	initEnv(outputFileName)
 	logFile := utils.InitLogger(LOG_PATH)
@@ -115,6 +115,10 @@ func main() {
 		execStep2(info)
 	} else {
 		outputNewM3u8(DEFAULT_INPUT_FILE_PATH, baseUrl, OUTPUT_FILE_PATH, bar)
+	}
+
+	if opt.CleanWorkDir && !TS_DOWNLOAD_FAIL {
+		defer cleanDir()
 	}
 
 	defer bar.Close()
@@ -378,8 +382,6 @@ func parseM3u8(filePath string, name string, baseUrl string) M3u8Info {
 			key_url := key_regexp.FindString(line)
 			info.is_aes = true
 			key_path := filepath.Join(DOWNLOAD_PATH, "key.key")
-			fmt.Println(line)
-			fmt.Println(key_url)
 
 			err := utils.DownloadFileFromUrl(key_path, key_url)
 			if err != nil {
