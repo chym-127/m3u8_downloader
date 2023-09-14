@@ -31,7 +31,6 @@ var (
 	OUTPUT_FILE_PATH               = ""
 	DEFAULT_INPUT_FILE_PATH string = ""
 	TS_DOWNLOAD_FAIL               = false
-	OnlyDownM3u8                   = false
 )
 
 var (
@@ -47,7 +46,6 @@ type Option struct {
 	RetryDownloadCount int    `short:"r" long:"retry" description:"文件下载重试次数" default:"3"`
 	MaximumCoucurrency int    `short:"d" long:"download" description:"下载最大并发数" default:"15"`
 	IgnoredDownFail    bool   `short:"g" long:"ignore" description:"忽略下载失败的文件"`
-	OnlyDownM3u8       bool   `short:"m" long:"m3u8" description:"忽略下载失败的文件"`
 	CleanWorkDir       bool   `short:"c" long:"clean" description:"下载成功后删除工作目录"`
 	WaitBeforeDown     int    `short:"w" long:"wait" description:"每次下载前线程睡眠多少毫秒" default:"0"`
 }
@@ -65,7 +63,6 @@ func main() {
 	MAXIMUM_CONCURRENCY = opt.MaximumCoucurrency
 	IGNORED_DOWNFAIL = opt.IgnoredDownFail
 	WAITBEFOREDOWN = opt.WaitBeforeDown
-	OnlyDownM3u8 = opt.OnlyDownM3u8
 	if opt.CleanWorkDir && !TS_DOWNLOAD_FAIL {
 		defer cleanDir()
 	}
@@ -106,7 +103,8 @@ func main() {
 		progressbar.OptionSetDescription("[reset]EVENT:PROGRESS=Download file..."),
 		progressbar.OptionShowCount())
 
-	if !OnlyDownM3u8 {
+	isMp4Reg, _ := regexp.Compile(".*.m3u8$")
+	if !isMp4Reg.MatchString(OUTPUT_FILE_PATH) {
 		execStep1(&info, bar)
 		fmt.Println()
 		utils.Println("Ts file downloaded successfully")
@@ -125,6 +123,10 @@ func main() {
 func outputNewM3u8(inputPath string, baseUrl string, outputPath string, bar *progressbar.ProgressBar) {
 	url_regexp, _ := regexp.Compile("http.*.ts")
 	ts_regexp, _ := regexp.Compile(".*.ts$")
+	duration_regexp, _ := regexp.Compile("#EXTINF:.*")
+	number_re := regexp.MustCompile("[0-9]+.[0-9]+")
+	number_re1 := regexp.MustCompile("[0-9]+")
+
 	readFile, err := os.Open(inputPath)
 	if err != nil {
 		log.Fatalf("failed creating file: %s", err)
@@ -133,6 +135,11 @@ func outputNewM3u8(inputPath string, baseUrl string, outputPath string, bar *pro
 	if err != nil {
 		log.Fatalf("failed creating file: %s", err)
 	}
+
+	if err := os.Truncate(outputPath, 0); err != nil {
+		log.Printf("Failed to truncate: %v", err)
+	}
+
 	datawriter := bufio.NewWriter(outFile)
 	if err != nil {
 		fmt.Println(err)
@@ -150,6 +157,14 @@ func outputNewM3u8(inputPath string, baseUrl string, outputPath string, bar *pro
 			if !url_regexp.MatchString(line) {
 				newLine = baseUrl + "/" + line
 			}
+		}
+		if duration_regexp.MatchString(line) {
+			str := number_re.FindString(line)
+			if len(str) == 0 {
+				str = number_re1.FindString(line)
+			}
+			str = str[:4]
+			newLine = "#EXTINF: " + str + ","
 		}
 		_, _ = datawriter.WriteString(newLine + "\n")
 	}
@@ -328,6 +343,8 @@ func parseM3u8(filePath string, name string, baseUrl string) M3u8Info {
 
 	if err != nil {
 		utils.Println(err)
+	} else {
+		defer readFile.Close()
 	}
 	fileScanner := bufio.NewScanner(readFile)
 	fileScanner.Split(bufio.ScanLines)
