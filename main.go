@@ -57,6 +57,9 @@ func main() {
 	flags.Parse(&opt)
 
 	filePath := opt.M3u8FilePath
+	if filePath == "" {
+		return
+	}
 	outputFileName := path.Base(opt.OutPutFilePath)
 	OUTPUT_FILE_PATH = opt.OutPutFilePath
 	RETRY_DOWNLOAD_COUNT = opt.RetryDownloadCount
@@ -112,7 +115,6 @@ func main() {
 		execStep2(info)
 	} else {
 		outputNewM3u8(DEFAULT_INPUT_FILE_PATH, baseUrl, OUTPUT_FILE_PATH, bar)
-		time.Sleep(time.Millisecond * time.Duration(1))
 	}
 
 	defer bar.Close()
@@ -163,7 +165,9 @@ func outputNewM3u8(inputPath string, baseUrl string, outputPath string, bar *pro
 			if len(str) == 0 {
 				str = number_re1.FindString(line)
 			}
-			str = str[:4]
+			if len(str) >= 4 {
+				str = str[:4]
+			}
 			newLine = "#EXTINF: " + str + ","
 		}
 		_, _ = datawriter.WriteString(newLine + "\n")
@@ -286,12 +290,24 @@ type taskFunc func()
 func taskFuncWrapper(info *M3u8Info, index int, filepath string, wg *sync.WaitGroup, bar *progressbar.ProgressBar) taskFunc {
 	return func() {
 		url := info.segments[index].url
+		aes_path := filepath
+		if info.is_aes {
+			aes_path = filepath + ".aes"
+		}
 		for i := 1; i <= RETRY_DOWNLOAD_COUNT; i++ {
-			if _, err := os.Stat(filepath); errors.Is(err, os.ErrNotExist) {
+			if _, err := os.Stat(aes_path); errors.Is(err, os.ErrNotExist) {
 				if WAITBEFOREDOWN > 0 {
 					time.Sleep(time.Millisecond * time.Duration(WAITBEFOREDOWN))
 				}
-				utils.DownloadFileFromUrl(filepath, url)
+				utils.DownloadFileFromUrl(aes_path, url)
+				if info.is_aes {
+					_, err := utils.DecryptFile([]byte(info.key_str), aes_path, filepath)
+					if err != nil {
+						utils.Println("EVENT:ERROR=文件解密失败")
+						panic("")
+					}
+					utils.RemoveFileIfExist(aes_path)
+				}
 			}
 			fileType, err := utils.GetMimetypeFromFilePath(filepath)
 
@@ -312,6 +328,8 @@ func taskFuncWrapper(info *M3u8Info, index int, filepath string, wg *sync.WaitGr
 
 type M3u8Info struct {
 	name           string //名称
+	is_aes         bool   // 是否加密
+	key_str        string
 	base_url       string
 	total_segment  int32     //子元素的个数
 	total_duration float64   //总时长
@@ -329,12 +347,16 @@ type Segment struct {
 func parseM3u8(filePath string, name string, baseUrl string) M3u8Info {
 	info := M3u8Info{
 		name:           name,
+		is_aes:         false,
 		base_url:       baseUrl,
 		total_segment:  0,
 		total_duration: 0.0,
 		segments:       []Segment{},
 	}
 	url_regexp, _ := regexp.Compile("http.*.ts")
+	has_key_regexp, _ := regexp.Compile("#EXT-X-KEY:.*")
+	key_regexp, _ := regexp.Compile("http.*.key")
+
 	duration_regexp, _ := regexp.Compile("#EXTINF:.*")
 	number_re := regexp.MustCompile("[0-9]+.[0-9]+")
 	number_re1 := regexp.MustCompile("[0-9]+")
@@ -352,6 +374,20 @@ func parseM3u8(filePath string, name string, baseUrl string) M3u8Info {
 	var count_index int32 = 1
 	for fileScanner.Scan() {
 		line := fileScanner.Text()
+		if has_key_regexp.MatchString(line) {
+			key_url := key_regexp.FindString(line)
+			info.is_aes = true
+			key_path := filepath.Join(DOWNLOAD_PATH, "key.key")
+			fmt.Println(line)
+			fmt.Println(key_url)
+
+			err := utils.DownloadFileFromUrl(key_path, key_url)
+			if err != nil {
+				utils.Println("EVENT:ERROR=key.key文件下载失败")
+				panic("")
+			}
+			info.key_str = utils.ReadFile2Str(key_path)
+		}
 		if duration_regexp.MatchString(line) {
 			str := number_re.FindString(line)
 			if len(str) == 0 {
