@@ -64,6 +64,11 @@ func main() {
 		return
 	}
 	outputFileName := path.Base(opt.OutPutFilePath)
+	err = os.MkdirAll(path.Dir(opt.OutPutFilePath), 0777)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
 	OUTPUT_FILE_PATH = opt.OutPutFilePath
 	RETRY_DOWNLOAD_COUNT = opt.RetryDownloadCount
 	MAXIMUM_CONCURRENCY = opt.MaximumCoucurrency
